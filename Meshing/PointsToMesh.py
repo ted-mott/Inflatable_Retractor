@@ -1,16 +1,16 @@
 """
 -------------------------------------------------------------------------------------------------------------------------------------------------
-PointsToMesh
-I/P: Filename, Perimeter points list (for closed loop), List of Weld points lists and spline bool for each and bool to join perimeter surfaces
+PointsToMesh.py
+I/P: FileName, WeldPointsList, WeldSpline, PerimeterPoints, PerimeterSpline, lc
 Method:
-    (1). Convert weld points to points, then join these into weld curves
-    (2). Convert perimeter points to points and join these into perimeter curves
+    (1). Convert points to GMSH points
+    (2). Create curves through points
     (3). Copy and translate
     (4). Create surfaces
     (5). Create Physical Groups
-    (6). Mesh
-    (7). Save mesh
-O/P: Save .msh file to file name specified on input, return filename (and location?) ready for next step
+    (6). Mesh geometry
+    (7). Save GMSH mesh
+O/P: FileName + ".geo_unrolled"
 -------------------------------------------------------------------------------------------------------------------------------------------------
 """
 
@@ -21,139 +21,191 @@ Modules to Import
 -------------------------------------------------------------------------------------------------------------------------------------------------
 """
 import gmsh
-import math
-import os
-
+#import math
+#import os
 
 
 """
-def PtsToGMSH(Pts):
-    PtTags = []
-    for p in Pts:
+-------------------------------------------------------------------------------------------------------------------------------------------------
+Functions
+-------------------------------------------------------------------------------------------------------------------------------------------------
+"""
+def PointsToGMSH(Points, lc):
+    
+    PointTagList = []
+    for p in Points:
+        PointTag = gmsh.model.geo.add_point(p[0], p[1], p[2], lc)
+        #p(0, 1, 2) = Point(x, y, z)
+        PointTagList.append(PointTag)
+    return(PointTagList)
+#convert point tuples to gmsh point - this structure was decided by me so that this gmsh module was reusable
 
-#point structure needs to be decided, I am thinking for the time being it could be smart to put this in main
+
+def PointsToSplineGMSH(PointTagList, Close_Loop):
+    
+    SplineTagList = []
+
+    if Close_Loop:
+        PointTagList.append(PointTagList[0])
+    # adds start point to list to ensure closed spline
+    
+    SplineTag = gmsh.model.geo.addSpline(PointTagList)
+    SplineTagList.append(SplineTag)
+    #this is using the GMSH solver spline not the opencascade(occ) spline so have to manually declare loop
+
+    return(SplineTagList)   
+#takes a list of gmsh point tags and returns the spline tag, if Close_Loop bool True then returns closed loop
+
+
+def PointsToLineGMSH(PointTagList, Close_Loop):
+    
+    LineTagList= []
+
+    for i in range(len(PointTagList)-1):
+        LineTag = gmsh.model.geo.add_line(PointTagList[i], PointTagList[i+1])
+        LineTagList.append(LineTag)
+
+    if Close_Loop:
+        LineTag = gmsh.model.geo.add_line(PointTagList[-1], PointTagList[0])
+        LineTagList.append(LineTag)
+
+    return(LineTagList)
+#This creates a list of lines, if the close-loop bool is true, it creates a closed loop
+
+
+def CopyAndTranslateGeometry(GMSHCurveList, ZTranslateDistance):
+    GMSHCurveList_OffsetZ = []
+    for GMSHCurve in GMSHCurveList:
+        Curve_OffsetZ = gmsh.model.geo.copy([(1, GMSHCurve)])
+        gmsh.model.geo.translate(Curve_OffsetZ, 0, 0, ZTranslateDistance)
+        GMSHCurveList_OffsetZ.append(Curve_OffsetZ[0][1])
+        # needs to be [0][1] as it is a little bit broken
+    return(GMSHCurveList_OffsetZ)
+
+
+def EmbedCurveInSurface(CurveTagList, SurfaceTag):
+
+        for CurveTag in CurveTagList:
+            gmsh.model.mesh.embed(1, CurveTag, 2, SurfaceTag)
+    # runs embed curve command in gmsh
+
+
+"""
+-------------------------------------------------------------------------------------------------------------------------------------------------
+Main
+-------------------------------------------------------------------------------------------------------------------------------------------------
 """
 
+def CreateFlatMesh(FileName, WeldPointsList, WeldSpline, PerimeterPoints, PerimeterSpline, lc, ZTranslateDistance):
 
-
-
-
-def curveSplineLoop(PtTags, Close_Loop):
-
-    if Close_Loop:
-        PtTags.append(PtTags[0])
-    
-    SplineTag = gmsh.model.geo.addSpline(PtTags)
-
-    if Close_Loop:
-        SplineLoop = gmsh.model.geo.add_curve_loop([SplineTag])
-        return (SplineLoop)
-    else:
-        return(SplineTag)
-    
-#takes a list of gmsh point tags and returns the spline tag (hopefully)
-
-
-def curveLoop(PtTags, Close_Loop):
-    LineTags= []
-
-    for i in range(len(PtTags)-1):
-        LineTag = gmsh.model.geo.add_line(PtTags[i], PtTags[i+1])
-        LineTags.append(LineTag)
-
-    if Close_Loop:
-        LineTag = gmsh.model.geo.add_line(PtTags[-1], PtTags[0])
-        LineTags.append(LineTag)
-
-        LoopTag = gmsh.model.geo.add_curve_loop(LineTags)
-        
-        return(LoopTag)
-    else:
-        return(LineTags)
-
-#I am really unsure that this will work, I am not very smart and such
-
-
-
-
-
-
-
-def CreateFlatMesh(FileName, WeldPoints, WeldSpline, PerimeterPoints, PerimeterSpline, JoinPerimeterSurf):
-
-    
-    #gmsh.initialize()
+    gmsh.initialize()
     #initialises GMSH environment
     
-    #gmsh.clear()
+    gmsh.clear()
     #clear all previous GMSH geometry
     
-    
-    
-    #(1) + (2) Define curves and loops
-    
 
-    WeldCurves = []
+    """
+    (1) Convert points to GMSH points
+    """
+    WeldPointListGMSH = []
+
+    for WeldPoints in WeldPointsList:
+        WeldPointsGMSH = PointsToGMSH(WeldPoints, lc)
+        WeldPointListGMSH.append(WeldPointsGMSH)
+    #convert weld curve points to GMSH points
+
+
+    PerimeterPointsGMSH = PointsToGMSH(PerimeterPoints, lc)
+    #PerimeterPointsGMSH.append(PerimeterPointsGMSH)
+    #convert perimeter points to GMSH points
+
+        
+    """
+    (2) Create curves through points
+    """
+    WeldCurveListGMSH = []
+    #software is assuming there will be one perimeter and multiple weld curves
     
     if WeldSpline:
-        for CurvePts in WeldPoints:
-            WeldLoop = curveSplineLoop(CurvePts, False)
-            #WeldCurves.append(WeldLoop)
+        for CurvePts in WeldPointListGMSH:
+            WeldCurveGMSH = PointsToSplineGMSH(CurvePts, False)
+            WeldCurveListGMSH.append(WeldCurveGMSH)
     else:
-        for CurvePts in WeldPoints:
-            
-            WeldLoop = curveLoop(CurvePts, False)
-            WeldCurves.append(WeldLoop)
-    #
-
+        for CurvePts in WeldPointListGMSH:
+            WeldCurveGMSH = PointsToLineGMSH(CurvePts, False)
+            WeldCurveListGMSH.append(WeldCurveGMSH)
+    #if WeldSpline true makes a spline, otherwise creates individual line segments, this just smooths basically
 
     if PerimeterSpline:
-        PerimeterLoop = curveSplineLoop(PerimeterPoints, True)
-
+        PerimeterCurve = PointsToSplineGMSH(PerimeterPointsGMSH, True)
     else:
-        PerimeterLoop = curveLoop(PerimeterPoints, True)
+        PerimeterCurve = PointsToLineGMSH(PerimeterPointsGMSH, True)
+    #Acts the same as WeldSpline but assumes single loop and it is assumed only perimeter loop is closed for now       
     
-    #(3) Copy and translate to create the 2 sides of the mesh
-    
-    s2 = gmsh.model.geo.addPlaneSurface([PerimeterLoop])
-    c2 = WeldCurves[int(0)]
-    
-      
-    print(c2)
+    PerimeterLoop = gmsh.model.geo.add_curve_loop(PerimeterCurve)
+    Surface = gmsh.model.geo.addPlaneSurface([PerimeterLoop])
 
+
+    """
+    (3) Copy and translate to create the 2 sides of the mesh
+    """
+    WeldCurveListGMSH_OffsetZ =[]
+
+    for WeldCurve in WeldCurveListGMSH:
+        WeldCurve_OffsetZ = CopyAndTranslateGeometry(WeldCurve, ZTranslateDistance)
+        WeldCurveListGMSH_OffsetZ.append(WeldCurve_OffsetZ)
+    
+    PerimeterCurve_OffsetZ = CopyAndTranslateGeometry(PerimeterCurve, ZTranslateDistance)
+    
+
+    Surface_OffsetZ = gmsh.model.geo.copy([(2, Surface)])
+    gmsh.model.geo.translate(Surface_OffsetZ, 0, 0, ZTranslateDistance)
+
+
+    """
+    (4) Define surfaces
+    """
+    
     gmsh.model.geo.synchronize()
 
-    gmsh.model.mesh.embed(1, [c2[0]], 2, s2)
-    gmsh.model.mesh.embed(1, [c2[1]], 2, s2)
-    #..embed(dimension to be embedded, tag, dimension embedded into, tag)
-    
-    #(4) Define surfaces
 
-    
+    """
+    (5) Define Physical groups
+    """
 
 
     
-    #(5) Define Physical groups
+    """
+    (6) Mesh geometry
+    """
+    EmbedCurveInSurface(WeldCurveListGMSH, Surface) #EmbedCurveInSurface(CurveTagList, SurfaceTag)
+    print("curve list" , WeldCurveListGMSH, "surface", Surface)
     
-
-
+    EmbedCurveInSurface(WeldCurveListGMSH_OffsetZ, Surface_OffsetZ[0][1])
+    print("curve list" , WeldCurveListGMSH_OffsetZ, "surface", Surface_OffsetZ[0][1])
+    #Embed curves in surfaces
 
     gmsh.model.geo.synchronize()
-    #updates all the geometry in file
-
-    
-    #(6) Generate Mesh
     
 
-    gmsh.model.mesh.generate(2)
-    # 2 corresponds to dimension of mesh generated, 2 = surface mesh
-
-
+    try:
+        #gmsh.model.mesh.setRecombine(2, SurfaceTag) #if only one surface 
+        gmsh.option.setNumber("Mesh.RecombineAll", 2) #if multiple surfaces
+        #(2) corresponds to dimension of mesh generated, 2 = surface, 1 = curve .etc.
+        gmsh.model.mesh.generate(2)
+    except:
+        print("Angle in curve to sharp for quad mesh, meshing with triangles")
+        gmsh.option.setNumber("Mesh.RecombineAll", 1) #if multiple surfaces
+     
+        gmsh.model.mesh.generate(2)
+    #If quad mesh is not possible flags error and continues with triangle mesh, this may have to be remedied in future iterations, if optimisation is to be done
     
-    #(7) Write file
     
-
-    gmsh.write(FileName + ".geo_unrolled")
+    """
+    (7) Save GMSH mesh
+    """
+    #gmsh.write(FileName + ".geo_unrolled")
 
     gmsh.fltk.run()
     #opens up GMSH pop up window
@@ -165,3 +217,9 @@ def CreateFlatMesh(FileName, WeldPoints, WeldSpline, PerimeterPoints, PerimeterS
     #output file name
 
 
+
+"""
+-------------------------------------------------------------------------------------------------------------------------------------------------
+End
+-------------------------------------------------------------------------------------------------------------------------------------------------
+"""
